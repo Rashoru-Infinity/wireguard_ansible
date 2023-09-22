@@ -1,0 +1,47 @@
+- hosts: server
+  remote_user: fedora
+  become: yes
+  gather_facts: no
+  vars:
+    WG_ADDR: 172.17.0.1/16
+    LISTEN_PORT: 51820
+  tasks:
+    - name: enable ipv4 forward
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        sysctl_set: true
+    - name: install packages
+      dnf:
+        name:
+          - wireguard-tools
+          - iptables
+    - name: generate private key
+      shell: wg genkey | tee /etc/wireguard/wg_host_key
+      register: private_key
+    - name: generate public key
+      shell: >
+        cat /etc/wireguard/wg_host_key
+        | wg pubkey
+        | tee /etc/wireguard/wg_host_key.pub
+    - name: set permission
+      file:
+        path: /etc/wireguard/{{ item }}
+        mode: '0600'
+      with_items:
+        - wg_host_key
+        - wg_host_key.pub
+    - name: touch wireguard config file
+      file:
+        path: /etc/wireguard/wg0.conf
+        state: touch
+    - name: configure interface
+      blockinfile:
+        path: /etc/wireguard/wg0.conf
+        block: |
+          [Interface]
+          PrivateKey = {{ private_key.stdout }}
+          Address = {{ WG_ADDR }}
+          ListenPort = {{ LISTEN_PORT }}
+          PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+          PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
